@@ -1,0 +1,93 @@
+name: Build .ipa
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and export .ipa
+    runs-on: macos-latest
+
+    env:
+      SCHEME: MusicApp
+      PROJECT: MusicApp.xcodeproj
+      ARCHIVE_PATH: build/MusicApp.xcarchive
+      EXPORT_PATH: build/ipa
+      KEYCHAIN_NAME: build.keychain
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Set up keychain and import signing certificate
+        env:
+          CERTIFICATE_P12: ${{ secrets.CERTIFICATE_P12 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          echo "$CERTIFICATE_P12" | base64 --decode > certificate.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_NAME"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_NAME"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_NAME"
+          security import certificate.p12 \
+            -k "$KEYCHAIN_NAME" \
+            -P "$CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12
+          security list-keychain -d user -s "$KEYCHAIN_NAME"
+          rm -f certificate.p12
+
+      - name: Install provisioning profile
+        env:
+          PROVISIONING_PROFILE: ${{ secrets.PROVISIONING_PROFILE }}
+        run: |
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          PROFILE_PATH=~/Library/MobileDevice/Provisioning\ Profiles/profile.mobileprovision
+          echo "$PROVISIONING_PROFILE" | base64 --decode > "$PROFILE_PATH"
+          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c "Print :UUID" \
+            /dev/stdin <<< $(security cms -D -i "$PROFILE_PATH"))
+          mv "$PROFILE_PATH" \
+            ~/Library/MobileDevice/Provisioning\ Profiles/"$PROFILE_UUID".mobileprovision
+          echo "PROVISIONING_PROFILE_UUID=$PROFILE_UUID" >> "$GITHUB_ENV"
+
+      - name: Build archive
+        run: |
+          xcodebuild archive \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -destination "generic/platform=iOS" \
+            -archivePath "$ARCHIVE_PATH" \
+            CODE_SIGN_STYLE=Manual \
+            PROVISIONING_PROFILE="$PROVISIONING_PROFILE_UUID" \
+            -allowProvisioningUpdates
+
+      - name: Export .ipa
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath "$ARCHIVE_PATH" \
+            -exportOptionsPlist ExportOptions.plist \
+            -exportPath "$EXPORT_PATH"
+
+      - name: Upload .ipa artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MusicApp-ipa
+          path: ${{ env.EXPORT_PATH }}/*.ipa
+          if-no-files-found: error
+
+      - name: Clean up keychain
+        if: always()
+        run: |
+          security delete-keychain "$KEYCHAIN_NAME" || true
