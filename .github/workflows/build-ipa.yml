@@ -13,29 +13,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v2
 
-      - name: Set up Keychain
-        run: |
-          echo "Setting up keychain..."
-          security create-keychain -p ${{ secrets.KEYCHAIN_PASSWORD }} build.keychain
-          security list-keychains -s build.keychain
-          security unlock-keychain -p ${{ secrets.KEYCHAIN_PASSWORD }} build.keychain
-          security set-keychain-settings -t 3600 -u build.keychain
-          echo "Importing certificate..."
-          security import <(echo ${{ secrets.CERTIFICATE_P12 }}) -P ${{ secrets.CERTIFICATE_PASSWORD }} -T "/usr/bin/codesign"
-
-      - name: Debug Environment Variables
-        run: |
-          echo "--- Debugging Environment Variables ---"
-          echo "CERTIFICATE_P12: ${{ secrets.CERTIFICATE_P12 }}"
-          echo "CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}"
-          echo "KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}"
-
       - name: Build
         run: |
           echo "Building the project..."
           # Add your build commands here
-
-      - name: Cleanup Keychain
-        run: |
-          echo "Cleaning up..."
-          security delete-keychain build.keychain
